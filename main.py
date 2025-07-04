@@ -1,3 +1,4 @@
+
 import os
 import json
 import time
@@ -5,6 +6,7 @@ from flask import Flask, request, jsonify
 from binance.client import Client
 from dotenv import load_dotenv
 from decimal import Decimal, ROUND_DOWN
+from threading import Thread
 
 load_dotenv()
 
@@ -59,6 +61,21 @@ def comprar_con_todo():
         print("❌ La cantidad calculada de BTC no es válida.")
         return "Cantidad de BTC inválida", 400
 
+def vender_todo():
+    state = load_state()
+    btc_comprado = float(state.get("btc_comprado", 0))
+
+    if btc_comprado > 0:
+        price = get_price()
+        cantidad_btc = Decimal(str(btc_comprado)).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
+        print(f"🚀 Ejecutando venta manual: {cantidad_btc} BTC a {price} USDC")
+        client.order_market_sell(symbol=SYMBOL, quantity=float(cantidad_btc))
+        save_state({"precio_compra": 0, "btc_comprado": 0, "usdc_invertido": 0})
+        return "Venta ejecutada", 200
+    else:
+        print("❌ No hay BTC para vender.")
+        return "Nada que vender", 400
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
@@ -75,32 +92,10 @@ def webhook():
         else:
             return "Ya tienes suficiente BTC, sin compra.", 200
 
+    if data['action'] == 'sell':
+        return vender_todo()
+
     return jsonify({'error': 'Acción desconocida'}), 400
 
-def venta_automatica_loop():
-    while True:
-        try:
-            state = load_state()
-            precio_compra = float(state.get("precio_compra", 0))
-            btc_comprado = float(state.get("btc_comprado", 0))
-            usdc_invertido = float(state.get("usdc_invertido", 0))
-
-            if precio_compra > 0 and btc_comprado > 0 and usdc_invertido > 0:
-                price = get_price()
-                objetivo_venta = usdc_invertido * 1.005  # 0.5% de beneficio
-                valor_actual = btc_comprado * price
-
-                if valor_actual >= objetivo_venta:
-                    cantidad_btc = Decimal(str(btc_comprado)).quantize(Decimal("0.00001"), rounding=ROUND_DOWN)
-                    print(f"🚀 Ejecutando venta automática: {cantidad_btc} BTC a {price} USDC (Valor actual: {valor_actual:.2f} USDC)")
-                    client.order_market_sell(symbol=SYMBOL, quantity=float(cantidad_btc))
-                    save_state({"precio_compra": 0, "btc_comprado": 0, "usdc_invertido": 0})
-        except Exception as e:
-            print("❌ Error en venta automática:", str(e))
-
-        time.sleep(120)  # Revisión cada 2 minutos
-
 if __name__ == '__main__':
-    from threading import Thread
-    Thread(target=venta_automatica_loop, daemon=True).start()
     app.run(host='0.0.0.0', port=8080)
