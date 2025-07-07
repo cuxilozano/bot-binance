@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify
 from binance.client import Client
 from binance.enums import *
@@ -43,13 +42,19 @@ def vender_si_1porciento():
 
             if precio_actual >= objetivo:
                 btc_balance = float(client.get_asset_balance(asset='BTC')["free"])
-                if btc_balance > 0.0001:
-                    client.order_market_sell(
-                        symbol="BTCUSDC",
-                        quantity=round(btc_balance, 6)
-                    )
-                    print(f"🔴 VENTA: {btc_balance} BTC a {precio_actual} USDC")
-                    precio_compra = 0  # Reiniciar para próxima compra
+                if btc_balance >= 0.00001:
+                    cantidad_btc = round(btc_balance, 6)
+                    try:
+                        client.order_market_sell(
+                            symbol="BTCUSDC",
+                            quantity=cantidad_btc
+                        )
+                        print(f"🔴 VENTA: {cantidad_btc} BTC a {precio_actual} USDC")
+                        precio_compra = 0  # Reiniciar para próxima compra
+                    except Exception as e:
+                        print(f"❌ ERROR ejecutando la venta: {e}")
+                else:
+                    print("⚠️ No hay suficiente BTC para vender (mínimo 0.00001 BTC)")
             else:
                 print(f"⏳ Revisando: actual={precio_actual}, objetivo={objetivo}")
 
