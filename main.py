@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from binance.client import Client
 from binance.enums import *
+from binance.helpers import round_step_size
 import os
 import time
 import threading
@@ -12,7 +13,6 @@ api_secret = os.getenv("BINANCE_API_SECRET")
 client = Client(api_key, api_secret)
 
 precio_compra = 0  # Se actualiza cuando se compra
-
 
 def comprar_todo():
     global precio_compra
@@ -28,7 +28,6 @@ def comprar_todo():
     precio_compra = float(order["fills"][0]["price"])
     print(f"✅ COMPRA: {order['executedQty']} BTC a {precio_compra} USDC")
 
-
 def vender_si_1porciento():
     global precio_compra
     while True:
@@ -42,19 +41,16 @@ def vender_si_1porciento():
 
             if precio_actual >= objetivo:
                 btc_balance = float(client.get_asset_balance(asset='BTC')["free"])
-                if btc_balance >= 0.00001:
-                    cantidad_btc = round(btc_balance, 6)
-                    try:
-                        client.order_market_sell(
-                            symbol="BTCUSDC",
-                            quantity=cantidad_btc
-                        )
-                        print(f"🔴 VENTA: {cantidad_btc} BTC a {precio_actual} USDC")
-                        precio_compra = 0  # Reiniciar para próxima compra
-                    except Exception as e:
-                        print(f"❌ ERROR ejecutando la venta: {e}")
+                if btc_balance > 0.0001:
+                    cantidad = round_step_size(btc_balance, 0.000001)
+                    client.order_market_sell(
+                        symbol="BTCUSDC",
+                        quantity=cantidad
+                    )
+                    print(f"🔴 VENTA: {cantidad} BTC a {precio_actual} USDC")
+                    precio_compra = 0  # Reiniciar para próxima compra
                 else:
-                    print("⚠️ No hay suficiente BTC para vender (mínimo 0.00001 BTC)")
+                    print("⚠️ No hay suficiente BTC para vender.")
             else:
                 print(f"⏳ Revisando: actual={precio_actual}, objetivo={objetivo}")
 
@@ -62,7 +58,6 @@ def vender_si_1porciento():
             print(f"❌ ERROR en venta automática: {e}")
 
         time.sleep(60)
-
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -74,8 +69,6 @@ def webhook():
     comprar_todo()
     return jsonify({"status": "Compra ejecutada"}), 200
 
-
 if __name__ == '__main__':
     threading.Thread(target=vender_si_1porciento, daemon=True).start()
     app.run(host='0.0.0.0', port=8080)
-
