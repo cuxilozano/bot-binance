@@ -57,6 +57,7 @@ def control_venta():
     while True:
         try:
             if precio_compra == 0 or hora_compra is None:
+                print("[BOT] Esperando una nueva compra...")
                 time.sleep(60)
                 continue
 
@@ -66,7 +67,10 @@ def control_venta():
             ahora = datetime.utcnow()
             tiempo_pasado = (ahora - hora_compra).total_seconds() / 3600
 
+            print(f"[BOT] Precio actual: {precio_actual:.2f}, Objetivo: {objetivo:.2f}, Tiempo desde compra: {tiempo_pasado:.1f}h")
+
             if precio_actual >= objetivo:
+                print("✅ OBJETIVO ALCANZADO. Ejecutando venta...")
                 vender_todo_btc(precio_actual)
             elif tiempo_pasado >= TIMEOUT_HORAS:
                 if precio_actual <= stop:
@@ -74,8 +78,6 @@ def control_venta():
                 else:
                     print("🕒 Timeout alcanzado: venta al precio actual")
                 vender_todo_btc(precio_actual)
-            else:
-                print(f"⏳ Revisando: actual={precio_actual:.2f}, objetivo={objetivo:.2f}, tiempo={tiempo_pasado:.1f}h")
 
         except Exception as e:
             print(f"❌ ERROR en control de venta: {e}")
