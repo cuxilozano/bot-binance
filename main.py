@@ -36,12 +36,13 @@ def guardar_estado():
             "hora_compra": hora_compra.isoformat() if hora_compra else None
         }, f)
 
-precio_compra = 0
-hora_compra = None
+precio_compra = 108572.85
+hora_compra = datetime.fromisoformat("2025-07-06T21:00:00")
+guardar_estado()
+
 TIMEOUT_HORAS = 120  # 5 días
 TAKE_PROFIT = 1.005  # +0.5%
 STOP_LOSS = 0.998    # -0.2%
-
 
 def comprar_todo():
     global precio_compra, hora_compra
@@ -59,7 +60,6 @@ def comprar_todo():
     guardar_estado()
     print(f"✅ COMPRA: {order['executedQty']} BTC a {precio_compra} USDC a las {hora_compra}")
 
-
 def vender_todo_btc(precio_actual):
     global precio_compra, hora_compra
     btc_balance = float(client.get_asset_balance(asset='BTC')["free"])
@@ -75,7 +75,6 @@ def vender_todo_btc(precio_actual):
     precio_compra = 0
     hora_compra = None
     guardar_estado()
-
 
 def control_venta():
     global precio_compra, hora_compra
@@ -109,7 +108,6 @@ def control_venta():
 
         time.sleep(60)
 
-
 @app.route('/webhook', methods=['POST'])
 def webhook():
     global precio_compra
@@ -119,7 +117,6 @@ def webhook():
 
     comprar_todo()
     return jsonify({"status": "Compra ejecutada"}), 200
-
 
 if __name__ == '__main__':
     cargar_estado()
