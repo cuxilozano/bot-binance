@@ -6,12 +6,35 @@ import os
 import time
 import threading
 from datetime import datetime, timedelta
+import json
 
 app = Flask(__name__)
 
 api_key = os.getenv("BINANCE_API_KEY")
 api_secret = os.getenv("BINANCE_API_SECRET")
 client = Client(api_key, api_secret)
+
+# Archivo para guardar el estado actual
+data_file = "estado_compra.json"
+
+def cargar_estado():
+    global precio_compra, hora_compra
+    if os.path.exists(data_file):
+        with open(data_file, "r") as f:
+            datos = json.load(f)
+            precio_compra = datos.get("precio_compra", 0)
+            hora_str = datos.get("hora_compra")
+            hora_compra = datetime.fromisoformat(hora_str) if hora_str else None
+    else:
+        precio_compra = 0
+        hora_compra = None
+
+def guardar_estado():
+    with open(data_file, "w") as f:
+        json.dump({
+            "precio_compra": precio_compra,
+            "hora_compra": hora_compra.isoformat() if hora_compra else None
+        }, f)
 
 precio_compra = 0
 hora_compra = None
@@ -33,6 +56,7 @@ def comprar_todo():
     )
     precio_compra = float(order["fills"][0]["price"])
     hora_compra = datetime.utcnow()
+    guardar_estado()
     print(f"✅ COMPRA: {order['executedQty']} BTC a {precio_compra} USDC a las {hora_compra}")
 
 
@@ -50,6 +74,7 @@ def vender_todo_btc(precio_actual):
         print("⚠️ No hay suficiente BTC para vender.")
     precio_compra = 0
     hora_compra = None
+    guardar_estado()
 
 
 def control_venta():
@@ -97,5 +122,6 @@ def webhook():
 
 
 if __name__ == '__main__':
+    cargar_estado()
     threading.Thread(target=control_venta, daemon=True).start()
     app.run(host='0.0.0.0', port=8080)
