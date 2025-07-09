@@ -63,15 +63,28 @@ def comprar_todo():
 def vender_todo_btc(precio_actual):
     global precio_compra, hora_compra
     btc_balance = float(client.get_asset_balance(asset='BTC')["free"])
-    if btc_balance > 0.0001:
-        cantidad = round_step_size(btc_balance, 0.000001)
-        client.order_market_sell(
-            symbol="BTCUSDC",
-            quantity=cantidad
-        )
-        print(f"🔴 VENTA: {cantidad} BTC a {precio_actual} USDC")
+
+    # Obtener el stepSize y minQty correctos desde Binance
+    symbol_info = client.get_symbol_info("BTCUSDC")
+    filters = {f['filterType']: f for f in symbol_info['filters']}
+    step_size = float(filters['LOT_SIZE']['stepSize'])
+    min_qty = float(filters['LOT_SIZE']['minQty'])
+
+    print(f"🔎 Balance BTC: {btc_balance}, minQty: {min_qty}, stepSize: {step_size}")
+
+    if btc_balance >= min_qty:
+        cantidad = round_step_size(btc_balance, step_size)
+        try:
+            order = client.order_market_sell(
+                symbol="BTCUSDC",
+                quantity=cantidad
+            )
+            print(f"🔴 VENTA: {cantidad} BTC a {precio_actual} USDC")
+        except Exception as e:
+            print(f"❌ ERROR en venta: {e}")
     else:
-        print("⚠️ No hay suficiente BTC para vender.")
+        print("⚠️ No hay suficiente BTC para vender según las reglas de Binance.")
+
     precio_compra = 0
     hora_compra = None
     guardar_estado()
