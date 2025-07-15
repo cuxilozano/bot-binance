@@ -1,137 +1,121 @@
-from flask import Flask, request, jsonify
-from binance.client import Client
-from binance.enums import *
-from binance.helpers import round_step_size
+import json
 import os
 import time
 import threading
 from datetime import datetime, timedelta
-import json
+from flask import Flask, request
+from binance.client import Client
 
 app = Flask(__name__)
 
-api_key = os.getenv("BINANCE_API_KEY")
-api_secret = os.getenv("BINANCE_API_SECRET")
-client = Client(api_key, api_secret)
+client = Client(
+    api_key=os.getenv("BINANCE_API_KEY"),
+    api_secret=os.getenv("BINANCE_API_SECRET")
+)
 
-# Archivo para guardar el estado actual
-data_file = "estado_compra.json"
+# ⚙️ PARÁMETROS ACTUALIZADOS
+TIMEOUT_HORAS = 72
+TAKE_PROFIT = 1.0075
+STOP_LOSS = 0.985
+
+PAIR = "BTCUSDC"
+JSON_FILE = "estado_compra.json"
 
 def cargar_estado():
-    global precio_compra, hora_compra
-    if os.path.exists(data_file):
-        with open(data_file, "r") as f:
-            datos = json.load(f)
-            precio_compra = datos.get("precio_compra", 0)
-            hora_str = datos.get("hora_compra")
-            hora_compra = datetime.fromisoformat(hora_str) if hora_str else None
-    else:
-        precio_compra = 0
-        hora_compra = None
+    try:
+        with open(JSON_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {"operacion_abierta": False}
 
-def guardar_estado():
-    with open(data_file, "w") as f:
-        json.dump({
-            "precio_compra": precio_compra,
-            "hora_compra": hora_compra.isoformat() if hora_compra else None
-        }, f)
+def guardar_estado(data):
+    with open(JSON_FILE, "w") as f:
+        json.dump(data, f)
 
-precio_compra = 108572.85
-hora_compra = datetime.fromisoformat("2025-07-06T21:00:00")
-guardar_estado()
+def obtener_precio_actual():
+    ticker = client.get_symbol_ticker(symbol=PAIR)
+    return float(ticker["price"])
 
-TIMEOUT_HORAS = 120  # 5 días
-TAKE_PROFIT = 1.005  # +0.5%
-STOP_LOSS = 0.998    # -0.2%
+def round_step_size(quantity, step_size):
+    return round(quantity - (quantity % step_size), 6)
 
-def comprar_todo():
-    global precio_compra, hora_compra
-    usdc_balance = float(client.get_asset_balance(asset='USDC')["free"])
-    if usdc_balance < 10:
-        print("❌ No hay suficiente USDC.")
+def comprar():
+    estado = cargar_estado()
+    if estado["operacion_abierta"]:
         return
 
-    order = client.order_market_buy(
-        symbol='BTCUSDC',
-        quoteOrderQty=usdc_balance
-    )
-    precio_compra = float(order["fills"][0]["price"])
-    hora_compra = datetime.utcnow()
-    guardar_estado()
-    print(f"✅ COMPRA: {order['executedQty']} BTC a {precio_compra} USDC a las {hora_compra}")
+    usdc_balance = float(client.get_asset_balance(asset="USDC")["free"])
+    precio = obtener_precio_actual()
+    cantidad = usdc_balance / precio
 
-def vender_todo_btc(precio_actual):
-    global precio_compra, hora_compra
-    btc_balance = float(client.get_asset_balance(asset='BTC')["free"])
+    info = client.get_symbol_info(PAIR)
+    step_size = 0.000001
+    for f in info["filters"]:
+        if f["filterType"] == "LOT_SIZE":
+            step_size = float(f["stepSize"])
 
-    # Obtener el stepSize y minQty correctos desde Binance
-    symbol_info = client.get_symbol_info("BTCUSDC")
-    filters = {f['filterType']: f for f in symbol_info['filters']}
-    step_size = float(filters['LOT_SIZE']['stepSize'])
-    min_qty = float(filters['LOT_SIZE']['minQty'])
+    cantidad = round_step_size(cantidad, step_size)
 
-    print(f"🔎 Balance BTC: {btc_balance}, minQty: {min_qty}, stepSize: {step_size}")
+    orden = client.order_market_buy(symbol=PAIR, quantity=cantidad)
+    guardar_estado({
+        "operacion_abierta": True,
+        "precio_compra": precio,
+        "hora_compra": datetime.now().isoformat()
+    })
+    print(f"✅ COMPRA: {cantidad} BTC a {precio}")
 
-    if btc_balance >= min_qty:
-        cantidad = round_step_size(btc_balance, step_size)
-        try:
-            order = client.order_market_sell(
-                symbol="BTCUSDC",
-                quantity=cantidad
-            )
-            print(f"🔴 VENTA: {cantidad} BTC a {precio_actual} USDC")
-        except Exception as e:
-            print(f"❌ ERROR en venta: {e}")
-    else:
-        print("⚠️ No hay suficiente BTC para vender según las reglas de Binance.")
+def vender():
+    estado = cargar_estado()
+    if not estado["operacion_abierta"]:
+        return
 
-    precio_compra = 0
-    hora_compra = None
-    guardar_estado()
+    btc_balance = float(client.get_asset_balance(asset="BTC")["free"])
+
+    info = client.get_symbol_info(PAIR)
+    step_size = 0.000001
+    for f in info["filters"]:
+        if f["filterType"] == "LOT_SIZE":
+            step_size = float(f["stepSize"])
+
+    cantidad = round_step_size(btc_balance, step_size)
+
+    orden = client.order_market_sell(symbol=PAIR, quantity=cantidad)
+    guardar_estado({"operacion_abierta": False})
+    print(f"✅ VENTA: {cantidad} BTC vendidas")
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    if data.get("action") == "buy":
+        comprar()
+    return {"status": "ok"}
 
 def control_venta():
-    global precio_compra, hora_compra
     while True:
         try:
-            if precio_compra == 0 or hora_compra is None:
-                print("[BOT] Esperando una nueva compra...")
-                time.sleep(60)
-                continue
+            estado = cargar_estado()
+            if estado["operacion_abierta"]:
+                precio_actual = obtener_precio_actual()
+                precio_compra = estado["precio_compra"]
+                hora_compra = datetime.fromisoformat(estado["hora_compra"])
+                tiempo_transcurrido = datetime.now() - hora_compra
 
-            precio_actual = float(client.get_symbol_ticker(symbol="BTCUSDC")["price"])
-            objetivo = precio_compra * TAKE_PROFIT
-            stop = precio_compra * STOP_LOSS
-            ahora = datetime.utcnow()
-            tiempo_pasado = (ahora - hora_compra).total_seconds() / 3600
+                if precio_actual >= precio_compra * TAKE_PROFIT:
+                    print("🎯 TAKE PROFIT alcanzado")
+                    vender()
+                elif precio_actual <= precio_compra * STOP_LOSS:
+                    print("🛑 STOP LOSS alcanzado")
+                    vender()
+                elif tiempo_transcurrido > timedelta(hours=TIMEOUT_HORAS):
+                    print("⏰ TIMEOUT alcanzado")
+                    vender()
 
-            print(f"[BOT] Precio actual: {precio_actual:.2f}, Objetivo: {objetivo:.2f}, Tiempo desde compra: {tiempo_pasado:.1f}h")
-
-            if precio_actual >= objetivo:
-                print("✅ OBJETIVO ALCANZADO. Ejecutando venta...")
-                vender_todo_btc(precio_actual)
-            elif tiempo_pasado >= TIMEOUT_HORAS:
-                if precio_actual <= stop:
-                    print("🛑 Timeout alcanzado: venta por pérdida máxima -0.2%")
-                else:
-                    print("🕒 Timeout alcanzado: venta al precio actual")
-                vender_todo_btc(precio_actual)
-
+            time.sleep(60)
         except Exception as e:
-            print(f"❌ ERROR en control de venta: {e}")
+            print(f"❌ Error en control_venta: {e}")
+            time.sleep(60)
 
-        time.sleep(60)
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    global precio_compra
-    data = request.json
-    if not data or data.get("action") != "buy":
-        return jsonify({"status": "Sin acción"}), 200
-
-    comprar_todo()
-    return jsonify({"status": "Compra ejecutada"}), 200
-
-if __name__ == '__main__':
-    cargar_estado()
-    threading.Thread(target=control_venta, daemon=True).start()
-    app.run(host='0.0.0.0', port=8080)
+if __name__ == "__main__":
+    threading.Thread(target=control_venta).start()
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
