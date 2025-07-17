@@ -13,7 +13,7 @@ client = Client(
     api_secret=os.getenv("BINANCE_API_SECRET")
 )
 
-# ⚙️ PARÁMETROS ACTUALIZADOS
+# ⚙️ PARÁMETROS CONFIGURABLES
 TIMEOUT_HORAS = 72
 TAKE_PROFIT = 1.0075
 STOP_LOSS = 0.985
@@ -69,19 +69,28 @@ def vender():
     if not estado["operacion_abierta"]:
         return
 
-    btc_balance = float(client.get_asset_balance(asset="BTC")["free"])
+    try:
+        btc_balance = float(client.get_asset_balance(asset="BTC")["free"])
+        print(f"🔍 Intentando vender {btc_balance} BTC...")
 
-    info = client.get_symbol_info(PAIR)
-    step_size = 0.000001
-    for f in info["filters"]:
-        if f["filterType"] == "LOT_SIZE":
-            step_size = float(f["stepSize"])
+        info = client.get_symbol_info(PAIR)
+        step_size = 0.000001
+        for f in info["filters"]:
+            if f["filterType"] == "LOT_SIZE":
+                step_size = float(f["stepSize"])
 
-    cantidad = round_step_size(btc_balance, step_size)
+        cantidad = round_step_size(btc_balance, step_size)
+        print(f"🧮 Cantidad ajustada: {cantidad} BTC")
 
-    orden = client.order_market_sell(symbol=PAIR, quantity=cantidad)
-    guardar_estado({"operacion_abierta": False})
-    print(f"✅ VENTA: {cantidad} BTC vendidas")
+        if cantidad > 0:
+            orden = client.order_market_sell(symbol=PAIR, quantity=cantidad)
+            guardar_estado({"operacion_abierta": False})
+            print(f"✅ VENTA: {cantidad} BTC vendidas")
+        else:
+            print("⚠️ Cantidad a vender es 0. No se ejecutó la orden.")
+
+    except Exception as e:
+        print(f"❌ Error durante la venta: {e}")
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -100,6 +109,8 @@ def control_venta():
                 hora_compra = datetime.fromisoformat(estado["hora_compra"])
                 tiempo_transcurrido = datetime.now() - hora_compra
 
+                print(f"[BOT] Precio actual: {precio_actual:.2f}, Objetivo: {precio_compra * TAKE_PROFIT:.2f}, Tiempo desde compra: {tiempo_transcurrido.total_seconds() / 3600:.1f}h")
+
                 if precio_actual >= precio_compra * TAKE_PROFIT:
                     print("🎯 TAKE PROFIT alcanzado")
                     vender()
@@ -111,6 +122,7 @@ def control_venta():
                     vender()
 
             time.sleep(60)
+
         except Exception as e:
             print(f"❌ Error en control_venta: {e}")
             time.sleep(60)
