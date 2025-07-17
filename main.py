@@ -13,7 +13,7 @@ client = Client(
     api_secret=os.getenv("BINANCE_API_SECRET")
 )
 
-# ⚙️ PARÁMETROS CONFIGURABLES
+# ⚙️ PARÁMETROS
 TIMEOUT_HORAS = 72
 TAKE_PROFIT = 1.0075
 STOP_LOSS = 0.985
@@ -56,7 +56,7 @@ def comprar():
 
     cantidad = round_step_size(cantidad, step_size)
 
-    orden = client.order_market_buy(symbol=PAIR, quantity=cantidad)
+    client.order_market_buy(symbol=PAIR, quantity=cantidad)
     guardar_estado({
         "operacion_abierta": True,
         "precio_compra": precio,
@@ -69,28 +69,19 @@ def vender():
     if not estado["operacion_abierta"]:
         return
 
-    try:
-        btc_balance = float(client.get_asset_balance(asset="BTC")["free"])
-        print(f"🔍 Intentando vender {btc_balance} BTC...")
+    btc_balance = float(client.get_asset_balance(asset="BTC")["free"])
 
-        info = client.get_symbol_info(PAIR)
-        step_size = 0.000001
-        for f in info["filters"]:
-            if f["filterType"] == "LOT_SIZE":
-                step_size = float(f["stepSize"])
+    info = client.get_symbol_info(PAIR)
+    step_size = 0.000001
+    for f in info["filters"]:
+        if f["filterType"] == "LOT_SIZE":
+            step_size = float(f["stepSize"])
 
-        cantidad = round_step_size(btc_balance, step_size)
-        print(f"🧮 Cantidad ajustada: {cantidad} BTC")
+    cantidad = round_step_size(btc_balance, step_size)
 
-        if cantidad > 0:
-            orden = client.order_market_sell(symbol=PAIR, quantity=cantidad)
-            guardar_estado({"operacion_abierta": False})
-            print(f"✅ VENTA: {cantidad} BTC vendidas")
-        else:
-            print("⚠️ Cantidad a vender es 0. No se ejecutó la orden.")
-
-    except Exception as e:
-        print(f"❌ Error durante la venta: {e}")
+    client.order_market_sell(symbol=PAIR, quantity=cantidad)
+    guardar_estado({"operacion_abierta": False})
+    print(f"✅ VENTA: {cantidad} BTC vendidas")
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -99,6 +90,7 @@ def webhook():
         comprar()
     return {"status": "ok"}
 
+# ✅ HILO DE CONTROL QUE CORRE SIEMPRE (TAKE PROFIT, STOP LOSS, TIMEOUT)
 def control_venta():
     while True:
         try:
@@ -122,12 +114,15 @@ def control_venta():
                     vender()
 
             time.sleep(60)
-
         except Exception as e:
             print(f"❌ Error en control_venta: {e}")
             time.sleep(60)
 
+# 🔁 LANZAR EL HILO TAMBIÉN EN RAILWAY
+threading.Thread(target=control_venta, daemon=True).start()
+
+# 🔧 EJECUCIÓN LOCAL (opcional)
 if __name__ == "__main__":
-    threading.Thread(target=control_venta).start()
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
