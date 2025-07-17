@@ -13,7 +13,6 @@ client = Client(
     api_secret=os.getenv("BINANCE_API_SECRET")
 )
 
-# ⚙️ PARÁMETROS
 TIMEOUT_HORAS = 72
 TAKE_PROFIT = 1.0075
 STOP_LOSS = 0.985
@@ -90,7 +89,6 @@ def webhook():
         comprar()
     return {"status": "ok"}
 
-# ✅ HILO DE CONTROL QUE CORRE SIEMPRE (TAKE PROFIT, STOP LOSS, TIMEOUT)
 def control_venta():
     while True:
         try:
@@ -118,10 +116,14 @@ def control_venta():
             print(f"❌ Error en control_venta: {e}")
             time.sleep(60)
 
-# 🔁 LANZAR EL HILO TAMBIÉN EN RAILWAY
-threading.Thread(target=control_venta, daemon=True).start()
+# ✅ Arranca el hilo siempre, con print inicial
+def lanzar_control_venta():
+    print("🔄 Iniciando control de ventas...")
+    hilo = threading.Thread(target=control_venta, daemon=True)
+    hilo.start()
 
-# 🔧 EJECUCIÓN LOCAL (opcional)
+lanzar_control_venta()
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
