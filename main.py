@@ -13,7 +13,7 @@ client = Client(
     api_secret=os.getenv("BINANCE_API_SECRET")
 )
 
-# PARÁMETROS ACTUALIZADOS
+# PARÁMETROS CONFIGURADOS
 TIMEOUT_HORAS = 72
 TAKE_PROFIT = 1.0075
 STOP_LOSS = 0.985
@@ -90,6 +90,10 @@ def webhook():
         comprar()
     return {"status": "ok"}
 
+@app.route("/status", methods=["GET"])
+def status():
+    return {"status": "alive"}
+
 def control_venta():
     print("🚀 Iniciando control de ventas...")
     while True:
@@ -120,6 +124,7 @@ def control_venta():
 
 if __name__ == "__main__":
     print("🟢 Bot iniciado correctamente.")
-    threading.Thread(target=control_venta, daemon=True).start()
+    hilo = threading.Thread(target=control_venta)
+    hilo.start()  # daemon=False por defecto
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
