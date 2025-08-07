@@ -2,7 +2,7 @@ import json
 import os
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask, request
 from binance.client import Client
 
@@ -12,11 +12,6 @@ client = Client(
     api_key=os.getenv("BINANCE_API_KEY"),
     api_secret=os.getenv("BINANCE_API_SECRET")
 )
-
-# PARÁMETROS CONFIGURADOS
-TIMEOUT_HORAS = 72
-TAKE_PROFIT = 1.0075
-STOP_LOSS = 0.985
 
 PAIR = "BTCUSDC"
 JSON_FILE = "estado_compra.json"
@@ -42,6 +37,7 @@ def round_step_size(quantity, step_size):
 def comprar():
     estado = cargar_estado()
     if estado["operacion_abierta"]:
+        print("⚠️ Ya hay una operación abierta. Ignorando señal de compra.")
         return
 
     usdc_balance = float(client.get_asset_balance(asset="USDC")["free"])
@@ -53,7 +49,6 @@ def comprar():
     for f in info["filters"]:
         if f["filterType"] == "LOT_SIZE":
             step_size = float(f["stepSize"])
-
     cantidad = round_step_size(cantidad, step_size)
 
     orden = client.order_market_buy(symbol=PAIR, quantity=cantidad)
@@ -67,6 +62,7 @@ def comprar():
 def vender():
     estado = cargar_estado()
     if not estado["operacion_abierta"]:
+        print("⚠️ No hay operación abierta. Ignorando señal de venta.")
         return
 
     btc_balance = float(client.get_asset_balance(asset="BTC")["free"])
@@ -76,7 +72,6 @@ def vender():
     for f in info["filters"]:
         if f["filterType"] == "LOT_SIZE":
             step_size = float(f["stepSize"])
-
     cantidad = round_step_size(btc_balance, step_size)
 
     orden = client.order_market_sell(symbol=PAIR, quantity=cantidad)
@@ -86,45 +81,18 @@ def vender():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    if data.get("action") == "buy":
+    action = data.get("action")
+    if action == "buy":
         comprar()
+    elif action == "sell":
+        vender()
     return {"status": "ok"}
 
 @app.route("/status", methods=["GET"])
 def status():
     return {"status": "alive"}
 
-def control_venta():
-    print("🚀 Iniciando control de ventas...")
-    while True:
-        try:
-            estado = cargar_estado()
-            if estado["operacion_abierta"]:
-                precio_actual = obtener_precio_actual()
-                precio_compra = estado["precio_compra"]
-                hora_compra = datetime.fromisoformat(estado["hora_compra"])
-                tiempo_transcurrido = datetime.now() - hora_compra
-
-                print(f"💡 Precio actual: {precio_actual:.2f} | Objetivo: {precio_compra * TAKE_PROFIT:.2f} | StopLoss: {precio_compra * STOP_LOSS:.2f}")
-
-                if precio_actual >= precio_compra * TAKE_PROFIT:
-                    print("🎯 TAKE PROFIT alcanzado")
-                    vender()
-                elif precio_actual <= precio_compra * STOP_LOSS:
-                    print("🛑 STOP LOSS alcanzado")
-                    vender()
-                elif tiempo_transcurrido > timedelta(hours=TIMEOUT_HORAS):
-                    print("⏰ TIMEOUT alcanzado")
-                    vender()
-
-            time.sleep(60)
-        except Exception as e:
-            print(f"❌ Error en control_venta: {e}")
-            time.sleep(60)
-
 if __name__ == "__main__":
-    print("🟢 Bot iniciado correctamente.")
-    hilo = threading.Thread(target=control_venta)
-    hilo.start()  # daemon=False por defecto
+    print("🟢 Bot pasivo con SuperTrend iniciado correctamente.")
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
