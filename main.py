@@ -1,4 +1,4 @@
-# main_v5.py — Modo B (TP1 0.5%, TP2 1% / BE, SL -1% si no tocó 0.5%)
+
 import json
 import os
 import time
