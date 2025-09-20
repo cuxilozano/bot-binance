@@ -3,12 +3,16 @@ import os
 import time
 import threading
 from datetime import datetime, timedelta
+from decimal import Decimal, ROUND_DOWN
+
 from flask import Flask, request, jsonify
 from binance.client import Client
 
 # ------------------ Config ------------------
 PAIR = "BTCUSDC"
 JSON_FILE = "estado_compra.json"
+
+STEP_SIZE = Decimal("0.000001")
 
 POLL_SECS = 5
 TIMEOUT_HORAS = None   # e.g. 72 si quieres forzar salida tras X horas
@@ -55,6 +59,19 @@ def guardar_estado(data):
         data["buy_lock"] = False
     with open(JSON_FILE, "w") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def normalizar_cantidad(qty):
+    if qty is None:
+        return 0.0
+    try:
+        cantidad = Decimal(str(qty))
+    except Exception:
+        return 0.0
+    normalizada = cantidad.quantize(STEP_SIZE, rounding=ROUND_DOWN)
+    if normalizada <= 0:
+        return 0.0
+    return float(normalizada)
 
 def obtener_precio_actual():
     ticker = client.get_symbol_ticker(symbol=PAIR)
@@ -152,33 +169,51 @@ def comprar_100(uid=None):
     print("🔒 buy_lock ACTIVADO: se ignoran nuevas BUY hasta cierre total.")
 
 def vender_qty(qty):
+    qty = normalizar_cantidad(qty)
     if qty <= 0:
         return None
-    return client.order_market_sell(symbol=PAIR, quantity=qty)
+    return client.order_market_sell(symbol=PAIR, quantity=f"{qty:.6f}")
 
 def vender_tp1(st):
     qty_total = float(st["qty_total"])
     qty_obj = qty_total * 0.5
     qty_libre = get_free("BTC")
-    qty_sell = min(qty_obj, qty_libre)
+    qty_sell = normalizar_cantidad(min(qty_obj, qty_libre))
+    if qty_sell <= 0:
+        return
     orden = vender_qty(qty_sell)
     if orden:
-        st["qty_restante"] = max(0.0, float(st["qty_restante"]) - qty_sell)
-        st["tp1_done"] = True
+        executed_qty = normalizar_cantidad(orden.get("executedQty", 0.0))
+        st["qty_restante"] = max(0.0, float(st["qty_restante"]) - executed_qty)
+        if executed_qty > 0:
+            st["tp1_done"] = True
         guardar_estado(st)
-        print(f"🎯 TP1 ejecutado: vendidas ~{qty_sell:.8f} BTC (50%)")
+        print(f"🎯 TP1 ejecutado: vendidas {executed_qty:.6f} BTC (50%)")
 
 def vender_resto_y_cerrar(st, motivo="Exit"):
     qty_rest = float(st.get("qty_restante", 0.0))
     if qty_rest <= 0:
         qty_rest = get_free("BTC")
+    qty_rest = normalizar_cantidad(qty_rest)
     orden = vender_qty(qty_rest)
+    desbloquear = True
     if orden:
-        print(f"✅ VENTA FINAL ({motivo}): {qty_rest:.8f} BTC")
+        executed_qty = normalizar_cantidad(orden.get("executedQty", 0.0))
+        st["qty_restante"] = max(0.0, float(st.get("qty_restante", 0.0)) - executed_qty)
+        guardar_estado(st)
+        if st["qty_restante"] > 0:
+            desbloquear = False
+            print(
+                f"⚠️ Venta parcial ({motivo}): ejecutadas {executed_qty:.6f} BTC, "
+                f"quedan {st['qty_restante']:.6f} BTC"
+            )
+        else:
+            print(f"✅ VENTA FINAL ({motivo}): {executed_qty:.6f} BTC")
     else:
         print(f"⚠️ Venta fallida ({motivo}), intenté limpiar todo.")
-    lock_off()
-    print("🔓 buy_lock LIBERADO: se aceptan nuevas BUY.")
+    if desbloquear:
+        lock_off()
+        print("🔓 buy_lock LIBERADO: se aceptan nuevas BUY.")
 
 # ------------------ Monitor ------------------
 def control_venta():
