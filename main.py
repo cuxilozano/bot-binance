@@ -18,8 +18,8 @@ POLL_SECS = 5
 TIMEOUT_HORAS = None   # e.g. 72 si quieres forzar salida tras X horas
 
 # Targets
-TP1_FACTOR = 1.0045    # +0.45% -> vende 50%
-SL_FACTOR  = 0.990     # -1.0%  -> solo si NO tocó TP1
+TP1_FACTOR = 1.005     # +0.5% -> vende 50%
+SL_FACTOR  = 0.993     # -0.7% -> solo si NO tocó TP1
 
 # Break-even fee-aware (BNB activado: ~0.075% por lado)
 FEE_SIDE = 0.00075
