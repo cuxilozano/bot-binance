@@ -27,7 +27,7 @@ BE_FACTOR = 1 + 2 * FEE_SIDE   # ~1.0015  (+0.15%)
 
 # Trailing del 50% restante
 TRAIL_ACTIVATION = 1.007   # +0.7% desde entry
-TRAIL_DIST = 0.0025        # 0.25% de retroceso desde el pico
+TRAIL_DIST = 0.003         # 0.30% de retroceso desde el pico
 
 # Buffer compras para evitar insufficient balance
 QUOTE_BUFFER = 0.002       # 0.2%
