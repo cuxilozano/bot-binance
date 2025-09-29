@@ -63,15 +63,15 @@ def guardar_estado(data):
 
 def normalizar_cantidad(qty):
     if qty is None:
-        return 0.0
+        return Decimal("0")
     try:
         cantidad = Decimal(str(qty))
     except Exception:
-        return 0.0
+        return Decimal("0")
     normalizada = cantidad.quantize(STEP_SIZE, rounding=ROUND_DOWN)
     if normalizada <= 0:
-        return 0.0
-    return float(normalizada)
+        return Decimal("0")
+    return normalizada
 
 def obtener_precio_actual():
     ticker = client.get_symbol_ticker(symbol=PAIR)
@@ -151,12 +151,15 @@ def comprar_100(uid=None):
         qty_exec = float(orden.get("executedQty", 0))
         avg_px = obtener_precio_actual()
 
+    qty_exec = normalizar_cantidad(qty_exec)
+    qty_exec_float = float(qty_exec)
+
     st = {
         "operacion_abierta": True,
         "precio_compra": avg_px,
         "hora_compra": now_iso(),
-        "qty_total": qty_exec,
-        "qty_restante": qty_exec,
+        "qty_total": qty_exec_float,
+        "qty_restante": qty_exec_float,
         "tp1_done": False,
         "trail_active": False,
         "trail_peak": None,
@@ -165,7 +168,7 @@ def comprar_100(uid=None):
         "buy_lock": True
     }
     guardar_estado(st)
-    print(f"✅ COMPRA: {qty_exec:.8f} BTC a {avg_px:.2f} USDC")
+    print(f"✅ COMPRA: {qty_exec_float:.8f} BTC a {avg_px:.2f} USDC")
     print("🔒 buy_lock ACTIVADO: se ignoran nuevas BUY hasta cierre total.")
 
 def vender_qty(qty):
@@ -184,11 +187,12 @@ def vender_tp1(st):
     orden = vender_qty(qty_sell)
     if orden:
         executed_qty = normalizar_cantidad(orden.get("executedQty", 0.0))
-        st["qty_restante"] = max(0.0, float(st["qty_restante"]) - executed_qty)
+        executed_qty_float = float(executed_qty)
+        st["qty_restante"] = max(0.0, float(st["qty_restante"]) - executed_qty_float)
         if executed_qty > 0:
             st["tp1_done"] = True
         guardar_estado(st)
-        print(f"🎯 TP1 ejecutado: vendidas {executed_qty:.6f} BTC (50%)")
+        print(f"🎯 TP1 ejecutado: vendidas {executed_qty_float:.6f} BTC (50%)")
 
 def vender_resto_y_cerrar(st, motivo="Exit"):
     qty_rest = float(st.get("qty_restante", 0.0))
@@ -199,16 +203,17 @@ def vender_resto_y_cerrar(st, motivo="Exit"):
     desbloquear = True
     if orden:
         executed_qty = normalizar_cantidad(orden.get("executedQty", 0.0))
-        st["qty_restante"] = max(0.0, float(st.get("qty_restante", 0.0)) - executed_qty)
+        executed_qty_float = float(executed_qty)
+        st["qty_restante"] = max(0.0, float(st.get("qty_restante", 0.0)) - executed_qty_float)
         guardar_estado(st)
         if st["qty_restante"] > 0:
             desbloquear = False
             print(
-                f"⚠️ Venta parcial ({motivo}): ejecutadas {executed_qty:.6f} BTC, "
+                f"⚠️ Venta parcial ({motivo}): ejecutadas {executed_qty_float:.6f} BTC, "
                 f"quedan {st['qty_restante']:.6f} BTC"
             )
         else:
-            print(f"✅ VENTA FINAL ({motivo}): {executed_qty:.6f} BTC")
+            print(f"✅ VENTA FINAL ({motivo}): {executed_qty_float:.6f} BTC")
     else:
         print(f"⚠️ Venta fallida ({motivo}), intenté limpiar todo.")
     if desbloquear:
