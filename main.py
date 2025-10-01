@@ -13,6 +13,10 @@ PAIR = "BTCUSDC"
 JSON_FILE = "estado_compra.json"
 
 STEP_SIZE = Decimal("0.000001")
+MIN_QTY = Decimal("0")
+DECIMAL_PLACES = 6
+
+_LOT_SIZE_CACHE = None
 
 POLL_SECS = 5
 TIMEOUT_HORAS = None   # e.g. 72 si quieres forzar salida tras X horas
@@ -41,6 +45,53 @@ client = Client(
     api_secret=os.getenv("BINANCE_API_SECRET")
 )
 
+
+def _calcular_decimales(step: Decimal) -> int:
+    try:
+        step_normalizado = step.normalize()
+        return max(0, -step_normalizado.as_tuple().exponent)
+    except Exception:
+        return DECIMAL_PLACES
+
+
+def cargar_filtros_lot_size(force: bool = False):
+    global STEP_SIZE, MIN_QTY, DECIMAL_PLACES, _LOT_SIZE_CACHE
+    if _LOT_SIZE_CACHE is not None and not force:
+        return _LOT_SIZE_CACHE
+    try:
+        info = client.get_symbol_info(symbol=PAIR)
+        filtros = info.get("filters", []) if info else []
+        lot_filter = next((f for f in filtros if f.get("filterType") == "LOT_SIZE"), None)
+        if lot_filter:
+            step_val = lot_filter.get("stepSize")
+            min_qty_val = lot_filter.get("minQty")
+            if step_val is not None:
+                step = Decimal(str(step_val))
+                if step > 0:
+                    STEP_SIZE = step
+                    DECIMAL_PLACES = _calcular_decimales(STEP_SIZE)
+            if min_qty_val is not None:
+                min_qty = Decimal(str(min_qty_val))
+                if min_qty >= 0:
+                    MIN_QTY = min_qty
+            _LOT_SIZE_CACHE = {
+                "stepSize": STEP_SIZE,
+                "minQty": MIN_QTY,
+                "decimals": DECIMAL_PLACES,
+            }
+            return _LOT_SIZE_CACHE
+    except Exception as e:
+        print(f"⚠️ No se pudo cargar LOT_SIZE para {PAIR}: {e}")
+    _LOT_SIZE_CACHE = {
+        "stepSize": STEP_SIZE,
+        "minQty": MIN_QTY,
+        "decimals": DECIMAL_PLACES,
+    }
+    return _LOT_SIZE_CACHE
+
+
+cargar_filtros_lot_size()
+
 # ------------------ Utils ------------------
 def cargar_estado():
     try:
@@ -61,6 +112,18 @@ def guardar_estado(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def formatear_cantidad(qty) -> str:
+    try:
+        cantidad = Decimal(str(qty))
+    except Exception:
+        return "0"
+    try:
+        cantidad = cantidad.quantize(STEP_SIZE, rounding=ROUND_DOWN)
+    except Exception:
+        pass
+    return f"{cantidad:.{DECIMAL_PLACES}f}"
+
+
 def normalizar_cantidad(qty):
     if qty is None:
         return Decimal("0")
@@ -68,8 +131,13 @@ def normalizar_cantidad(qty):
         cantidad = Decimal(str(qty))
     except Exception:
         return Decimal("0")
-    normalizada = cantidad.quantize(STEP_SIZE, rounding=ROUND_DOWN)
-    if normalizada <= 0:
+    step = STEP_SIZE if STEP_SIZE > 0 else Decimal("0.000001")
+    try:
+        normalizada = (cantidad // step) * step
+        normalizada = normalizada.quantize(step, rounding=ROUND_DOWN)
+    except Exception:
+        return Decimal("0")
+    if normalizada <= 0 or normalizada < MIN_QTY:
         return Decimal("0")
     return normalizada
 
@@ -175,7 +243,8 @@ def vender_qty(qty):
     qty = normalizar_cantidad(qty)
     if qty <= 0:
         return None
-    return client.order_market_sell(symbol=PAIR, quantity=f"{qty:.6f}")
+    qty_str = formatear_cantidad(qty)
+    return client.order_market_sell(symbol=PAIR, quantity=qty_str)
 
 def vender_tp1(st):
     qty_total = float(st["qty_total"])
@@ -192,7 +261,7 @@ def vender_tp1(st):
         if executed_qty > 0:
             st["tp1_done"] = True
         guardar_estado(st)
-        print(f"🎯 TP1 ejecutado: vendidas {executed_qty_float:.6f} BTC (50%)")
+        print(f"🎯 TP1 ejecutado: vendidas {formatear_cantidad(executed_qty)} BTC (50%)")
 
 def vender_resto_y_cerrar(st, motivo="Exit"):
     qty_rest = float(st.get("qty_restante", 0.0))
@@ -209,11 +278,11 @@ def vender_resto_y_cerrar(st, motivo="Exit"):
         if st["qty_restante"] > 0:
             desbloquear = False
             print(
-                f"⚠️ Venta parcial ({motivo}): ejecutadas {executed_qty_float:.6f} BTC, "
-                f"quedan {st['qty_restante']:.6f} BTC"
+                f"⚠️ Venta parcial ({motivo}): ejecutadas {formatear_cantidad(executed_qty)} BTC, "
+                f"quedan {formatear_cantidad(st['qty_restante'])} BTC"
             )
         else:
-            print(f"✅ VENTA FINAL ({motivo}): {executed_qty_float:.6f} BTC")
+            print(f"✅ VENTA FINAL ({motivo}): {formatear_cantidad(executed_qty)} BTC")
     else:
         print(f"⚠️ Venta fallida ({motivo}), intenté limpiar todo.")
     if desbloquear:
