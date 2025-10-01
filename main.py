@@ -11,6 +11,7 @@ from binance.client import Client
 # ------------------ Config ------------------
 PAIR = "BTCUSDC"
 JSON_FILE = "estado_compra.json"
+STATE_LOCK = threading.Lock()
 
 STEP_SIZE = Decimal("0.000001")
 MIN_QTY = Decimal("0")
@@ -94,22 +95,24 @@ cargar_filtros_lot_size()
 
 # ------------------ Utils ------------------
 def cargar_estado():
-    try:
-        with open(JSON_FILE, "r") as f:
-            data = json.load(f)
-            # sane defaults si faltan
-            if "buy_lock" not in data:
-                data["buy_lock"] = False
-            return data
-    except:
-        return {"operacion_abierta": False, "buy_lock": False}
+    with STATE_LOCK:
+        try:
+            with open(JSON_FILE, "r") as f:
+                data = json.load(f)
+                # sane defaults si faltan
+                if "buy_lock" not in data:
+                    data["buy_lock"] = False
+                return data
+        except:
+            return {"operacion_abierta": False, "buy_lock": False}
 
 def guardar_estado(data):
     # asegura campo buy_lock siempre presente
     if "buy_lock" not in data:
         data["buy_lock"] = False
-    with open(JSON_FILE, "w") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    with STATE_LOCK:
+        with open(JSON_FILE, "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def formatear_cantidad(qty) -> str:
