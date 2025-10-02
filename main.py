@@ -91,25 +91,41 @@ def cargar_filtros_lot_size(force: bool = False):
     return _LOT_SIZE_CACHE
 
 # ------------------ Utils ------------------
-def cargar_estado():
-    with STATE_LOCK:
-        try:
-            with open(JSON_FILE, "r") as f:
-                data = json.load(f)
-                # sane defaults si faltan
-                if "buy_lock" not in data:
-                    data["buy_lock"] = False
-                return data
-        except:
-            return {"operacion_abierta": False, "buy_lock": False}
+def _cargar_estado_unlocked():
+    try:
+        with open(JSON_FILE, "r") as f:
+            data = json.load(f)
+            if "buy_lock" not in data:
+                data["buy_lock"] = False
+            return data
+    except Exception:
+        return {"operacion_abierta": False, "buy_lock": False}
 
-def guardar_estado(data):
-    # asegura campo buy_lock siempre presente
+
+def cargar_estado(use_lock: bool = True):
+    if use_lock:
+        with STATE_LOCK:
+            return _cargar_estado_unlocked()
+    return _cargar_estado_unlocked()
+
+
+def _guardar_estado_unlocked(data, origin: str | None = None):
+    thread_name = threading.current_thread().name
+    label = origin or "desconocido"
+    print(f"[{thread_name}] ➜ Guardando estado (origen={label})")
+    with open(JSON_FILE, "w") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"[{thread_name}] ✔ Estado guardado (origen={label})")
+
+
+def guardar_estado(data, use_lock: bool = True, origin: str | None = None):
     if "buy_lock" not in data:
         data["buy_lock"] = False
-    with STATE_LOCK:
-        with open(JSON_FILE, "w") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+    if use_lock:
+        with STATE_LOCK:
+            _guardar_estado_unlocked(data, origin)
+    else:
+        _guardar_estado_unlocked(data, origin)
 
 
 def formatear_cantidad(qty) -> str:
@@ -153,17 +169,15 @@ def now_iso():
     return datetime.now().isoformat()
 
 def lock_on():
-    st = cargar_estado()
-    st["buy_lock"] = True
-    guardar_estado(st)
+    with STATE_LOCK:
+        st = cargar_estado(use_lock=False)
+        st["buy_lock"] = True
+        guardar_estado(st, use_lock=False, origin="lock_on")
 
 def lock_off():
-    st = cargar_estado()
-    st["buy_lock"] = False
-    st["operacion_abierta"] = False
-    # limpia resto de campos para el próximo ciclo
-    keep = {"operacion_abierta": False, "buy_lock": False}
-    guardar_estado(keep)
+    with STATE_LOCK:
+        keep = {"operacion_abierta": False, "buy_lock": False}
+        guardar_estado(keep, use_lock=False, origin="lock_off")
 
 def reconciliar_estado():
     st = cargar_estado()
@@ -183,7 +197,7 @@ def reconciliar_estado():
     elif qty_rest > 0 and abs(qty_wallet - qty_rest) / max(qty_rest, 1e-8) > 0.02:
         print(f"ℹ️ Ajusto qty_restante {qty_rest:.8f} -> {qty_wallet:.8f}")
         st["qty_restante"] = qty_wallet
-        guardar_estado(st)
+        guardar_estado(st, origin="reconciliar_estado:sync_qty")
 
 # ------------------ Trading ------------------
 def comprar_100(uid=None):
@@ -235,7 +249,7 @@ def comprar_100(uid=None):
         "last_uid": uid,
         "buy_lock": True
     }
-    guardar_estado(st)
+    guardar_estado(st, origin="comprar_100")
     print(f"✅ COMPRA: {qty_exec_float:.8f} BTC a {avg_px:.2f} USDC")
     print("🔒 buy_lock ACTIVADO: se ignoran nuevas BUY hasta cierre total.")
 
@@ -260,7 +274,7 @@ def vender_tp1(st):
         st["qty_restante"] = max(0.0, float(st["qty_restante"]) - executed_qty_float)
         if executed_qty > 0:
             st["tp1_done"] = True
-        guardar_estado(st)
+        guardar_estado(st, origin="vender_tp1")
         print(f"🎯 TP1 ejecutado: vendidas {formatear_cantidad(executed_qty)} BTC (50%)")
 
 def vender_resto_y_cerrar(st, motivo="Exit"):
@@ -274,7 +288,7 @@ def vender_resto_y_cerrar(st, motivo="Exit"):
         executed_qty = normalizar_cantidad(orden.get("executedQty", 0.0))
         executed_qty_float = float(executed_qty)
         st["qty_restante"] = max(0.0, float(st.get("qty_restante", 0.0)) - executed_qty_float)
-        guardar_estado(st)
+        guardar_estado(st, origin=f"vender_resto_y_cerrar:{motivo}")
         if st["qty_restante"] > 0:
             desbloquear = False
             print(
@@ -323,7 +337,7 @@ def control_venta():
                         if px >= entry * TRAIL_ACTIVATION:
                             st["trail_active"] = True
                             st["trail_peak"] = px
-                            guardar_estado(st)
+                            guardar_estado(st, origin="control_venta:trail_on")
                             print(f"🔓 Trailing ON @ {px:.2f} (+{(px/entry-1)*100:.2f}%)")
                         elif px <= entry * BE_FACTOR:
                             vender_resto_y_cerrar(st, "BreakEven")
@@ -331,7 +345,7 @@ def control_venta():
                         # trailing activo
                         if px > float(st["trail_peak"] or entry):
                             st["trail_peak"] = px
-                            guardar_estado(st)
+                            guardar_estado(st, origin="control_venta:update_peak")
                         stop_trail = float(st["trail_peak"]) * (1 - TRAIL_DIST)
                         if px <= stop_trail:
                             vender_resto_y_cerrar(st, "TrailingStop")
