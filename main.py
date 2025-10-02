@@ -40,6 +40,8 @@ _LOT_SIZE_CACHE = None
 
 # Compras
 QUOTE_BUFFER = 0.002   # 0.2% para evitar insufficient balance
+
+# Token opcional para /unlock
 UNLOCK_TOKEN = os.getenv("UNLOCK_TOKEN", "")
 
 # =================== App & Client ===================
@@ -55,10 +57,7 @@ STATE_LOCK = threading.Lock()
 
 # =================== Helpers: timeframe ===================
 def _tf_to_binance(tf: str) -> str:
-    m = {
-        "1m":"1m","5m":"5m","15m":"15m","30m":"30m",
-        "1h":"1h","2h":"2h","4h":"4h"
-    }
+    m = {"1m":"1m","5m":"5m","15m":"15m","30m":"30m","1h":"1h","2h":"2h","4h":"4h"}
     return m.get(tf, "1h")
 
 def _tf_seconds(tf: str) -> int:
@@ -184,9 +183,8 @@ def _calc_atr(period: int = ATR_PERIOD):
     """ATR simple (SMA) usando TR clásico. Devuelve ATR en unidades de precio."""
     kl = _fetch_klines(limit=max(period + 2, 20))
     if not kl or len(kl) < period + 1:
-        # fallback: 1% del precio si no hay datos (muy conservador)
         px = obtener_precio_actual()
-        return 0.01 * px
+        return 0.01 * px  # fallback conservador
     highs = [float(k[2]) for k in kl]
     lows = [float(k[3]) for k in kl]
     closes = [float(k[4]) for k in kl]
@@ -202,19 +200,13 @@ def _calc_atr(period: int = ATR_PERIOD):
 
 # =================== Trading core ===================
 def _calcular_niveles(entry):
-    """Calcula TP, SL por ATR (cap a 1.5%), activación y stop de trailing."""
     atr = _calc_atr(ATR_PERIOD) * ATR_MULT         # ATR absoluto
     sl_atr_price = entry - atr
     sl_cap_price = entry * (1 - SL_MAX_PCT)
     sl_price = max(sl_atr_price, sl_cap_price)     # cap a -1.5% máximo
     tp_price = entry * (1 + TP_PCT)
     trail_on_price = entry * (1 + TRAIL_ON_PCT)
-    return {
-        "atr_abs": atr,
-        "sl_price": sl_price,
-        "tp_price": tp_price,
-        "trail_on_price": trail_on_price
-    }
+    return {"atr_abs": atr, "sl_price": sl_price, "tp_price": tp_price, "trail_on_price": trail_on_price}
 
 def comprar_100(uid=None):
     st = cargar_estado()
@@ -228,6 +220,7 @@ def comprar_100(uid=None):
         log("ℹ️ Alerta duplicada ignorada por uid."); return
 
     # Si ya hay BTC en wallet (tras reinicio), adjuntar en vez de recomprar
+    cargar_filtros_lot_size()
     if normalizar_cantidad(get_free("BTC")) >= MIN_QTY:
         auto_attach_from_wallet()
         return
@@ -261,19 +254,15 @@ def comprar_100(uid=None):
         "precio_compra": avg_px,
         "qty_total": qty_exec_float,
         "qty_restante": qty_exec_float,
-
-        # niveles
         "sl_price": lv["sl_price"],
         "tp_price": lv["tp_price"],
         "trail_on_price": lv["trail_on_price"],
         "trail_active": False,
         "trail_peak": None,
-
-        # cooldown
         "cooldown_until": None
     }
     guardar_estado(st, origin="comprar_100")
-    log(f"✅ COMPRA: {qty_exec_float:.8f} BTC @ {avg_px:.2f} | TP @ {lv['tp_price']:.2f} | SL @ {lv['sl_price']:.2f} | TrailON @ {lv['trail_on_price']:.2f}")
+    log(f"✅ COMPRA: {qty_exec_float:.8f} BTC @ {avg_px:.2f} | TP {lv['tp_price']:.2f} | SL {lv['sl_price']:.2f} | TrailON {lv['trail_on_price']:.2f}")
 
 def vender_qty(qty):
     qty = normalizar_cantidad(qty)
@@ -308,7 +297,6 @@ def _cerrar_todo(st, motivo="Exit"):
     if qty_rest <= 0:
         log(f"ℹ️ Nada vendible ({motivo}). Posible dust < minQty. Libero lock + cooldown.")
         lock_off()
-        # empezar cooldown aunque haya polvo
         st = cargar_estado(); _aplicar_cooldown(st)
         return
     orden = vender_qty(qty_rest)
@@ -325,42 +313,46 @@ def _cerrar_todo(st, motivo="Exit"):
     else:
         log(f"⚠️ Venta fallida ({motivo}).")
     if not desbloquear and float(st.get("qty_restante", 0.0)) < float(MIN_QTY):
-        log("ℹ️ Resto < minQty (dust). Libero lock.")
-        desbloquear = True
+        log("ℹ️ Resto < minQty (dust). Libero lock."); desbloquear = True
     if desbloquear:
         lock_off()
-        # activa cooldown tras cerrar
         st = cargar_estado(); _aplicar_cooldown(st)
 
-# =================== Auto-attach ===================
+# =================== Auto-attach (blindado) ===================
 def auto_attach_from_wallet():
+    # Asegura LOT_SIZE real (MIN_QTY correcto) antes de decidir
+    cargar_filtros_lot_size()
+    qty_wallet_raw = get_free("BTC")
+    qty_wallet = normalizar_cantidad(qty_wallet_raw)
+    if qty_wallet <= 0 or qty_wallet < MIN_QTY:
+        log(f"🔎 Auto-attach: nada que adjuntar (wallet={qty_wallet_raw:.8f} < minQty {MIN_QTY})")
+        return
+
     st = cargar_estado()
     if st.get("operacion_abierta"): return
-    qty_wallet = normalizar_cantidad(get_free("BTC"))
-    if qty_wallet >= MIN_QTY:
-        try:
-            trades = client.get_my_trades(symbol=PAIR, limit=50)
-            total_qty = 0.0; spent = 0.0
-            for tr in reversed(trades):
-                if tr.get("isBuyer"):
-                    q = float(tr["qty"]); p = float(tr["price"])
-                    total_qty += q; spent += q * p
-                    if total_qty >= float(qty_wallet) * 0.98:
-                        break
-            entry = spent / total_qty if total_qty > 0 else obtener_precio_actual()
-            lv = _calcular_niveles(entry)
-            st.update({
-                "operacion_abierta": True, "buy_lock": True, "last_uid": None,
-                "hora_compra": now_iso(), "precio_compra": entry,
-                "qty_total": float(qty_wallet), "qty_restante": float(qty_wallet),
-                "sl_price": lv["sl_price"], "tp_price": lv["tp_price"],
-                "trail_on_price": lv["trail_on_price"], "trail_active": False, "trail_peak": None,
-                "cooldown_until": None
-            })
-            guardar_estado(st, origin="auto_attach")
-            log(f"🔗 Auto-attach: {formatear_cantidad(qty_wallet)} BTC | entry≈{entry:.2f} | TP {lv['tp_price']:.2f} | SL {lv['sl_price']:.2f}")
-        except Exception as e:
-            log(f"⚠️ Auto-attach falló: {e}")
+    try:
+        trades = client.get_my_trades(symbol=PAIR, limit=50)
+        total_qty = 0.0; spent = 0.0
+        for tr in reversed(trades):
+            if tr.get("isBuyer"):
+                q = float(tr["qty"]); p = float(tr["price"])
+                total_qty += q; spent += q * p
+                if total_qty >= float(qty_wallet) * 0.98:
+                    break
+        entry = spent / total_qty if total_qty > 0 else obtener_precio_actual()
+        lv = _calcular_niveles(entry)
+        st.update({
+            "operacion_abierta": True, "buy_lock": True, "last_uid": None,
+            "hora_compra": now_iso(), "precio_compra": entry,
+            "qty_total": float(qty_wallet), "qty_restante": float(qty_wallet),
+            "sl_price": lv["sl_price"], "tp_price": lv["tp_price"],
+            "trail_on_price": lv["trail_on_price"], "trail_active": False, "trail_peak": None,
+            "cooldown_until": None
+        })
+        guardar_estado(st, origin="auto_attach")
+        log(f"🔗 Auto-attach: {formatear_cantidad(qty_wallet)} BTC | entry≈{entry:.2f} | TP {lv['tp_price']:.2f} | SL {lv['sl_price']:.2f}")
+    except Exception as e:
+        log(f"⚠️ Auto-attach falló: {e}")
 
 # =================== Monitor ===================
 _last_watch_log = 0.0
@@ -449,6 +441,7 @@ def webhook():
             log("🔒 BUY ignorado: operación aún no cerrada.")
             return jsonify({"status": "ignored_locked"})
         # si hay BTC en wallet, adjuntar en lugar de recomprar
+        cargar_filtros_lot_size()
         if normalizar_cantidad(get_free("BTC")) >= MIN_QTY:
             auto_attach_from_wallet()
             return jsonify({"status": "attached_existing_position"})
@@ -489,21 +482,23 @@ if __name__ == "__main__":
     try:
         log("🟢 Bot V8 (TP2% / SL ATR≤1.5% / Trail 1.9%–1% / Cooldown 2 velas) iniciando…")
         log(f"ENV PORT={os.environ.get('PORT')}  PAIR={PAIR}  STATE_FILE={JSON_FILE}  TF={TF_INTERVAL}")
-        # Hilo de control
-        hilo = threading.Thread(target=control_venta, daemon=True)
-        hilo.start()
-        # LOT_SIZE
+
+        # 1) LOT_SIZE ANTES del hilo (parche)
         try:
             cfg = cargar_filtros_lot_size(force=True)
             log(f"ℹ️ LOT_SIZE: step={cfg['stepSize']}, minQty={cfg['minQty']}, decimals={cfg['decimals']}")
         except Exception as e:
             log(f"⚠️ No se pudo cargar LOT_SIZE en arranque: {e}")
-        # Flask
+
+        # 2) Arranco el hilo de control
+        hilo = threading.Thread(target=control_venta, daemon=True)
+        hilo.start()
+
+        # 3) Flask
         port = int(os.environ.get("PORT", 8080))
         app.run(host="0.0.0.0", port=port, debug=False)
     except Exception as e:
         log(f"❌ Error fatal en arranque: {e}")
         import traceback; traceback.print_exc()
         sys.exit(1)
-
 
