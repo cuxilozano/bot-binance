@@ -90,9 +90,6 @@ def cargar_filtros_lot_size(force: bool = False):
     }
     return _LOT_SIZE_CACHE
 
-
-cargar_filtros_lot_size()
-
 # ------------------ Utils ------------------
 def cargar_estado():
     with STATE_LOCK:
@@ -388,6 +385,7 @@ def unlock():
 # ------------------ Boot ------------------
 if __name__ == "__main__":
     print("🟢 Bot V7 (Modo B + Trailing + BuyLock) iniciado.")
+    cargar_filtros_lot_size(force=True)
     hilo = threading.Thread(target=control_venta, daemon=True)
     hilo.start()
     port = int(os.environ.get("PORT", 8080))
