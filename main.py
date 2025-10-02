@@ -314,7 +314,7 @@ def auto_attach_from_wallet():
     if st.get("operacion_abierta"):
         return
     qty_wallet = normalizar_cantidad(get_free("BTC"))
-    if qty_wallet >= MIN_QTY:
+    if qty_wallet > Decimal("0") and qty_wallet >= MIN_QTY:
         try:
             trades = client.get_my_trades(symbol=PAIR, limit=50)
             total_qty = 0.0
@@ -343,6 +343,13 @@ def auto_attach_from_wallet():
             log(f"🔗 Auto-attach: detecté {formatear_cantidad(qty_wallet)} BTC. Entry≈{avg_px:.2f}")
         except Exception as e:
             log(f"⚠️ Auto-attach falló: {e}")
+    else:
+        if qty_wallet > Decimal("0"):
+            log(
+                f"ℹ️ Auto-attach omitido: saldo {formatear_cantidad(qty_wallet)} BTC < min requerido {formatear_cantidad(MIN_QTY)}."
+            )
+        else:
+            log("ℹ️ Auto-attach omitido: saldo BTC insuficiente para adjuntar.")
 
 # ------------------ Monitor ------------------
 _last_watch_log = 0.0
